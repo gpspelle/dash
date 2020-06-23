@@ -1,162 +1,95 @@
-# -*- coding: utf-8 -*-
 import dash
+from dash.dependencies import Input, Output
 import dash_core_components as dcc
 import dash_html_components as html
-from dash.dependencies import Input, Output, State
+import datetime
+from flask_caching import Cache
+import os
 import pandas as pd
+import time
+import uuid
 
-external_stylesheets = ['https://codepen.io/chriddyp/pen/bWLwgP.css']
+external_stylesheets = [
+    # Dash CSS
+    'https://codepen.io/chriddyp/pen/bWLwgP.css',
+    # Loading screen CSS
+    'https://codepen.io/chriddyp/pen/brPBPO.css']
+
 app = dash.Dash(__name__, external_stylesheets=external_stylesheets)
+cache = Cache(app.server, config={
+    'CACHE_TYPE': 'redis',
+    # Note that filesystem cache doesn't work on systems with ephemeral
+    # filesystems like Heroku.
+    'CACHE_TYPE': 'filesystem',
+    'CACHE_DIR': 'cache-directory',
 
-df = pd.read_csv('https://plotly.github.io/datasets/country_indicators.csv')
-
-available_indicators = df['Indicator Name'].unique()
-
-app.layout = html.Div([
-    html.Div([
-
-        html.Div([
-            dcc.Dropdown(
-                id='crossfilter-xaxis-column',
-                options=[{'label': i, 'value': i} for i in available_indicators],
-                value='Fertility rate, total (births per woman)'
-            ),
-            dcc.RadioItems(
-                id='crossfilter-xaxis-type',
-                options=[{'label': i, 'value': i} for i in ['Linear', 'Log']],
-                value='Linear',
-                labelStyle={'display': 'inline-block'}
-            )
-        ],
-        style={'width': '49%', 'display': 'inline-block'}),
-
-        html.Div([
-            dcc.Dropdown(
-                id='crossfilter-yaxis-column',
-                options=[{'label': i, 'value': i} for i in available_indicators],
-                value='Life expectancy at birth, total (years)'
-            ),
-            dcc.RadioItems(
-                id='crossfilter-yaxis-type',
-                options=[{'label': i, 'value': i} for i in ['Linear', 'Log']],
-                value='Linear',
-                labelStyle={'display': 'inline-block'}
-            )
-        ], style={'width': '49%', 'float': 'right', 'display': 'inline-block'})
-    ], style={
-        'borderBottom': 'thin lightgrey solid',
-        'backgroundColor': 'rgb(250, 250, 250)',
-        'padding': '10px 5px'
-    }),
-
-    html.Div([
-        dcc.Graph(
-            id='crossfilter-indicator-scatter',
-            hoverData={'points': [{'customdata': 'Japan'}]}
-        )
-    ], style={'width': '49%', 'display': 'inline-block', 'padding': '0 20'}),
-    html.Div([
-        dcc.Graph(id='x-time-series'),
-        dcc.Graph(id='y-time-series'),
-    ], style={'display': 'inline-block', 'width': '49%'}),
-
-    html.Div(dcc.Slider(
-        id='crossfilter-year--slider',
-        min=df['Year'].min(),
-        max=df['Year'].max(),
-        value=df['Year'].max(),
-        marks={str(year): str(year) for year in df['Year'].unique()},
-        step=None
-    ), style={'width': '49%', 'padding': '0px 20px 20px 20px'})
-])
+    # should be equal to maximum number of users on the app at a single time
+    # higher numbers will store more data in the filesystem / redis cache
+    'CACHE_THRESHOLD': 200
+})
 
 
-@app.callback(
-    dash.dependencies.Output('crossfilter-indicator-scatter', 'figure'),
-    [dash.dependencies.Input('crossfilter-xaxis-column', 'value'),
-     dash.dependencies.Input('crossfilter-yaxis-column', 'value'),
-     dash.dependencies.Input('crossfilter-xaxis-type', 'value'),
-     dash.dependencies.Input('crossfilter-yaxis-type', 'value'),
-     dash.dependencies.Input('crossfilter-year--slider', 'value')])
-def update_graph(xaxis_column_name, yaxis_column_name,
-                 xaxis_type, yaxis_type,
-                 year_value):
-    dff = df[df['Year'] == year_value]
+def get_dataframe(session_id):
+    @cache.memoize()
+    def query_and_serialize_data(session_id):
+        # expensive or user/session-unique data processing step goes here
 
-    return {
-        'data': [dict(
-            x=dff[dff['Indicator Name'] == xaxis_column_name]['Value'],
-            y=dff[dff['Indicator Name'] == yaxis_column_name]['Value'],
-            text=dff[dff['Indicator Name'] == yaxis_column_name]['Country Name'],
-            customdata=dff[dff['Indicator Name'] == yaxis_column_name]['Country Name'],
-            mode='markers',
-            marker={
-                'size': 15,
-                'opacity': 0.5,
-                'line': {'width': 0.5, 'color': 'white'}
-            }
-        )],
-        'layout': dict(
-            xaxis={
-                'title': xaxis_column_name,
-                'type': 'linear' if xaxis_type == 'Linear' else 'log'
-            },
-            yaxis={
-                'title': yaxis_column_name,
-                'type': 'linear' if yaxis_type == 'Linear' else 'log'
-            },
-            margin={'l': 40, 'b': 30, 't': 10, 'r': 0},
-            height=450,
-            hovermode='closest'
-        )
-    }
+        # simulate a user/session-unique data processing step by generating
+        # data that is dependent on time
+        now = datetime.datetime.now()
+
+        # simulate an expensive data processing task by sleeping
+        time.sleep(5)
+
+        df = pd.DataFrame({
+            'time': [
+                str(now - datetime.timedelta(seconds=15)),
+                str(now - datetime.timedelta(seconds=10)),
+                str(now - datetime.timedelta(seconds=5)),
+                str(now)
+            ],
+            'values': ['a', 'b', 'a', 'c']
+        })
+        return df.to_json()
+
+    return pd.read_json(query_and_serialize_data(session_id))
 
 
-def create_time_series(dff, axis_type, title):
-    return {
-        'data': [dict(
-            x=dff['Year'],
-            y=dff['Value'],
-            mode='lines+markers'
-        )],
-        'layout': {
-            'height': 225,
-            'margin': {'l': 20, 'b': 30, 'r': 10, 't': 10},
-            'annotations': [{
-                'x': 0, 'y': 0.85, 'xanchor': 'left', 'yanchor': 'bottom',
-                'xref': 'paper', 'yref': 'paper', 'showarrow': False,
-                'align': 'left', 'bgcolor': 'rgba(255, 255, 255, 0.5)',
-                'text': title
-            }],
-            'yaxis': {'type': 'linear' if axis_type == 'Linear' else 'log'},
-            'xaxis': {'showgrid': False}
-        }
-    }
+def serve_layout():
+    session_id = str(uuid.uuid4())
+
+    return html.Div([
+        html.Div(session_id, id='session-id', style={'display': 'none'}),
+        html.Button('Get data', id='get-data-button'),
+        html.Div(id='output-1'),
+        html.Div(id='output-2')
+    ])
 
 
-@app.callback(
-    dash.dependencies.Output('x-time-series', 'figure'),
-    [dash.dependencies.Input('crossfilter-indicator-scatter', 'hoverData'),
-     dash.dependencies.Input('crossfilter-xaxis-column', 'value'),
-     dash.dependencies.Input('crossfilter-xaxis-type', 'value')])
-def update_y_timeseries(hoverData, xaxis_column_name, axis_type):
-    country_name = hoverData['points'][0]['customdata']
-    dff = df[df['Country Name'] == country_name]
-    dff = dff[dff['Indicator Name'] == xaxis_column_name]
-    title = '<b>{}</b><br>{}'.format(country_name, xaxis_column_name)
-    return create_time_series(dff, axis_type, title)
+app.layout = serve_layout
 
 
-@app.callback(
-    dash.dependencies.Output('y-time-series', 'figure'),
-    [dash.dependencies.Input('crossfilter-indicator-scatter', 'hoverData'),
-     dash.dependencies.Input('crossfilter-yaxis-column', 'value'),
-     dash.dependencies.Input('crossfilter-yaxis-type', 'value')])
-def update_x_timeseries(hoverData, yaxis_column_name, axis_type):
-    dff = df[df['Country Name'] == hoverData['points'][0]['customdata']]
-    dff = dff[dff['Indicator Name'] == yaxis_column_name]
-    return create_time_series(dff, axis_type, yaxis_column_name)
+@app.callback(Output('output-1', 'children'),
+              [Input('get-data-button', 'n_clicks'),
+               Input('session-id', 'children')])
+def display_value_1(value, session_id):
+    df = get_dataframe(session_id)
+    return html.Div([
+        'Output 1 - Button has been clicked {} times'.format(value),
+        html.Pre(df.to_csv())
+    ])
+
+
+@app.callback(Output('output-2', 'children'),
+              [Input('get-data-button', 'n_clicks'),
+               Input('session-id', 'children')])
+def display_value_2(value, session_id):
+    df = get_dataframe(session_id)
+    return html.Div([
+        'Output 2 - Button has been clicked {} times'.format(value),
+        html.Pre(df.to_csv())
+    ])
 
 
 if __name__ == '__main__':
-    app.run_server(host='0.0.0.0', debug=True, port=8050)
+    app.run_server(host='0.0.0.0', debug=True, processes=1, port=8050)
