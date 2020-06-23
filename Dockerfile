@@ -14,7 +14,10 @@ RUN \
   sh ~/.vim_runtime/install_awesome_vimrc.sh
 RUN \
   pip3 install dash==1.13.3 pandas
+RUN \
+  pip3 install flask_caching redis
 
 WORKDIR /home
+
 CMD ["python3", "app.py"]
 
