@@ -15,9 +15,9 @@ RUN \
 RUN \
   pip3 install dash==1.13.3 pandas
 RUN \
-  pip3 install flask_caching redis
+  pip3 install flask_caching redis flask gunicorn
 
 WORKDIR /home
+COPY app.py ./
 
 CMD ["python3", "app.py"]
-

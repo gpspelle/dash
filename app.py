@@ -2,12 +2,15 @@ import dash
 from dash.dependencies import Input, Output
 import dash_core_components as dcc
 import dash_html_components as html
-import datetime
+from flask import Flask
 from flask_caching import Cache
+import numpy as np
+import copy
 import os
 import pandas as pd
 import time
 import uuid
+import datetime
 
 external_stylesheets = [
     # Dash CSS
@@ -15,81 +18,122 @@ external_stylesheets = [
     # Loading screen CSS
     'https://codepen.io/chriddyp/pen/brPBPO.css']
 
-app = dash.Dash(__name__, external_stylesheets=external_stylesheets)
+server = Flask(__name__)
+app = dash.Dash(server=server, external_stylesheets=external_stylesheets)
+
 cache = Cache(app.server, config={
     'CACHE_TYPE': 'redis',
-    # Note that filesystem cache doesn't work on systems with ephemeral
-    # filesystems like Heroku.
-    'CACHE_TYPE': 'filesystem',
-    'CACHE_DIR': 'cache-directory',
-
-    # should be equal to maximum number of users on the app at a single time
-    # higher numbers will store more data in the filesystem / redis cache
-    'CACHE_THRESHOLD': 200
+    'CACHE_REDIS_HOST': 'myapp-redis',
+    'CACHE_REDIS_PORT': '6379'
 })
 
+N = 100
 
-def get_dataframe(session_id):
-    @cache.memoize()
-    def query_and_serialize_data(session_id):
-        # expensive or user/session-unique data processing step goes here
+df = pd.DataFrame({
+    'category': (
+        (['apples'] * 5 * N) +
+        (['oranges'] * 10 * N) +
+        (['figs'] * 20 * N) +
+        (['pineapples'] * 15 * N)
+    )
+})
+df['x'] = np.random.randn(len(df['category']))
+df['y'] = np.random.randn(len(df['category']))
 
-        # simulate a user/session-unique data processing step by generating
-        # data that is dependent on time
-        now = datetime.datetime.now()
+app.layout = html.Div([
+    dcc.Dropdown(
+        id='dropdown',
+        options=[{'label': i, 'value': i} for i in df['category'].unique()],
+        value='apples'
+    ),
+    html.Div([
+        html.Div(dcc.Graph(id='graph-1'), className="six columns"),
+        html.Div(dcc.Graph(id='graph-2'), className="six columns"),
+    ], className="row"),
+    html.Div([
+        html.Div(dcc.Graph(id='graph-3'), className="six columns"),
+        html.Div(dcc.Graph(id='graph-4'), className="six columns"),
+    ], className="row"),
 
-        # simulate an expensive data processing task by sleeping
-        time.sleep(5)
-
-        df = pd.DataFrame({
-            'time': [
-                str(now - datetime.timedelta(seconds=15)),
-                str(now - datetime.timedelta(seconds=10)),
-                str(now - datetime.timedelta(seconds=5)),
-                str(now)
-            ],
-            'values': ['a', 'b', 'a', 'c']
-        })
-        return df.to_json()
-
-    return pd.read_json(query_and_serialize_data(session_id))
-
-
-def serve_layout():
-    session_id = str(uuid.uuid4())
-
-    return html.Div([
-        html.Div(session_id, id='session-id', style={'display': 'none'}),
-        html.Button('Get data', id='get-data-button'),
-        html.Div(id='output-1'),
-        html.Div(id='output-2')
-    ])
+    # hidden signal value
+    html.Div(id='signal', style={'display': 'none'})
+])
 
 
-app.layout = serve_layout
+# perform expensive computations in this "global store"
+# these computations are cached in a globally available
+# redis memory store which is available across processes
+# and for all time.
+@cache.memoize()
+def global_store(value):
+    # simulate expensive query
+    print('Computing value with {}'.format(value))
+    time.sleep(5)
+    return df[df['category'] == value]
 
 
-@app.callback(Output('output-1', 'children'),
-              [Input('get-data-button', 'n_clicks'),
-               Input('session-id', 'children')])
-def display_value_1(value, session_id):
-    df = get_dataframe(session_id)
-    return html.Div([
-        'Output 1 - Button has been clicked {} times'.format(value),
-        html.Pre(df.to_csv())
-    ])
+def generate_figure(value, figure):
+    fig = copy.deepcopy(figure)
+    filtered_dataframe = global_store(value)
+    fig['data'][0]['x'] = filtered_dataframe['x']
+    fig['data'][0]['y'] = filtered_dataframe['y']
+    fig['layout'] = {'margin': {'l': 20, 'r': 10, 'b': 20, 't': 10}}
+    return fig
 
 
-@app.callback(Output('output-2', 'children'),
-              [Input('get-data-button', 'n_clicks'),
-               Input('session-id', 'children')])
-def display_value_2(value, session_id):
-    df = get_dataframe(session_id)
-    return html.Div([
-        'Output 2 - Button has been clicked {} times'.format(value),
-        html.Pre(df.to_csv())
-    ])
+@app.callback(Output('signal', 'children'), [Input('dropdown', 'value')])
+def compute_value(value):
+    # compute value and send a signal when done
+    global_store(value)
+    return value
 
+
+@app.callback(Output('graph-1', 'figure'), [Input('signal', 'children')])
+def update_graph_1(value):
+    # generate_figure gets data from `global_store`.
+    # the data in `global_store` has already been computed
+    # by the `compute_value` callback and the result is stored
+    # in the global redis cached
+    return generate_figure(value, {
+        'data': [{
+            'type': 'scatter',
+            'mode': 'markers',
+            'marker': {
+                'opacity': 0.5,
+                'size': 14,
+                'line': {'border': 'thin darkgrey solid'}
+            }
+        }]
+    })
+
+
+@app.callback(Output('graph-2', 'figure'), [Input('signal', 'children')])
+def update_graph_2(value):
+    return generate_figure(value, {
+        'data': [{
+            'type': 'scatter',
+            'mode': 'lines',
+            'line': {'shape': 'spline', 'width': 0.5},
+        }]
+    })
+
+
+@app.callback(Output('graph-3', 'figure'), [Input('signal', 'children')])
+def update_graph_3(value):
+    return generate_figure(value, {
+        'data': [{
+            'type': 'histogram2d',
+        }]
+    })
+
+
+@app.callback(Output('graph-4', 'figure'), [Input('signal', 'children')])
+def update_graph_4(value):
+    return generate_figure(value, {
+        'data': [{
+            'type': 'histogram2dcontour',
+        }]
+    })
 
 if __name__ == '__main__':
-    app.run_server(host='0.0.0.0', debug=True, processes=1, port=8050)
+    app.run_server(host='0.0.0.0', debug=True, port=8050)

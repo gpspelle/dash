@@ -1,0 +1,24 @@
+# docker-compose.yml
+version: '3'
+networks:
+  myapp-network:
+services:
+  # main application
+  myapp:
+    container_name: myapp
+    build:
+      .
+    depends_on:
+      - "myapp-redis"
+    networks:
+      - myapp-network
+    ports:
+      - "8050:8050"
+  # redis cache for storing data
+  myapp-redis:
+    container_name: myapp-redis
+    image: redis
+    networks:
+      - myapp-network
+    expose:
+      - "6379"
